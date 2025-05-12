@@ -1,109 +1,136 @@
-# SafeCheck
+# SafeCheck Mobile App
 
-SafeCheck is a mobile application that helps you stay connected with your loved ones through regular check-ins. The app allows you to schedule automated check-ins and receive notifications when someone needs assistance.
+A React Native mobile application for personal safety and check-ins.
 
 ## Features
 
-- User authentication (email/password)
+- User authentication (phone OTP)
+- Real-time check-ins with location sharing
+- Emergency alerts with location tracking
+- Push notifications for check-ins and emergencies
 - Contact management
-- Scheduled check-ins
-- Push notifications
-- Check-in history
-- Customizable check-in questions
-- Response tracking
-- Settings management
+- Profile customization
+- User preferences management
+- Dark mode support
 
-## Prerequisites
+## Technical Stack
 
-- Node.js (v14+)
-- npm or yarn
-- Expo CLI (`npm install -g expo-cli`)
-- Firebase account
-- Twilio account (optional, for SMS)
-- SendGrid account (optional, for email)
-- Android Studio (for Android deployment)
-- Xcode (for iOS deployment)
-- Apple Developer Account (for iOS deployment)
-- Google Play Developer Account (for Android deployment)
+- React Native
+- Expo
+- Firebase
+  - Authentication (Phone OTP)
+  - Firestore
+  - Cloud Functions
+  - Storage
+- React Navigation
+- Expo Notifications
+- React Native Maps
 
 ## Setup
 
-1. Clone the repository:
-```bash
-git clone https://github.com/yourusername/safecheck.git
-cd safecheck
-```
-
-2. Install dependencies:
+1. Install dependencies:
 ```bash
 npm install
-# or
-yarn install
 ```
 
-3. Configure Firebase:
-   - Create a new Firebase project
-   - Enable Authentication (Email/Password)
-   - Set up Firestore Database
+2. Configure Firebase:
+   - Create a Firebase project
+   - Enable Phone Authentication
+   - Set up Firestore
    - Configure Cloud Functions
-   - Download and add Firebase configuration files:
-     - `GoogleService-Info.plist` for iOS
-     - `google-services.json` for Android
+   - Set up Storage
 
-4. Update Firebase configuration:
-   - Open `config/firebase.js`
-   - Replace the placeholder values with your Firebase project credentials
+3. Update Firebase configuration in `app.json`:
+```json
+{
+  "expo": {
+    "extra": {
+      "firebaseConfig": {
+        // Your Firebase config
+      }
+    }
+  }
+}
+```
 
-5. Start the development server:
+4. Start the development server:
 ```bash
 expo start
 ```
 
-## Deployment
-
-### iOS
-
-1. Update `app.json` with your iOS bundle identifier
-2. Build the app:
-```bash
-eas build --platform ios
-```
-3. Submit to App Store Connect
-
-### Android
-
-1. Update `app.json` with your Android package name
-2. Build the app:
-```bash
-eas build --platform android
-```
-3. Submit to Google Play Console
-
-## Environment Variables
-
-Create a `.env` file in the root directory with the following variables:
+## Project Structure
 
 ```
-FIREBASE_API_KEY=your_api_key
-FIREBASE_AUTH_DOMAIN=your_auth_domain
-FIREBASE_PROJECT_ID=your_project_id
-FIREBASE_STORAGE_BUCKET=your_storage_bucket
-FIREBASE_MESSAGING_SENDER_ID=your_messaging_sender_id
-FIREBASE_APP_ID=your_app_id
-FIREBASE_MEASUREMENT_ID=your_measurement_id
+SafeCheck/
+├── components/         # Reusable components
+├── screens/           # Screen components
+├── navigation/        # Navigation configuration
+├── services/         # API and service functions
+├── utils/            # Utility functions
+├── assets/           # Images and other assets
+└── functions/        # Firebase Cloud Functions
 ```
+
+## Features in Detail
+
+### Authentication
+- Phone number verification using Firebase Authentication
+- Secure OTP-based login
+- Profile management with photo upload
+
+### Check-ins
+- Real-time location sharing
+- Customizable check-in intervals
+- Auto check-in support
+- Check-in history with pagination
+- Response options (text, photo, voice)
+
+### Emergency Alerts
+- One-tap emergency activation
+- Real-time location tracking
+- Contact notifications
+- Emergency history
+
+### Notifications
+- Push notifications for:
+  - Check-in reminders
+  - Emergency alerts
+  - Response requests
+  - Contact updates
+- Customizable notification preferences
+
+### User Preferences
+- Notification settings
+- Location sharing preferences
+- Check-in interval selection
+- Dark mode toggle
+- Profile customization
+
+## Security
+
+- Firebase Security Rules for data access
+- Secure file uploads with size limits
+- Phone number verification
+- Location data encryption
+
+## Performance Optimizations
+
+- Image compression for uploads
+- Pagination for history screens
+- Efficient data loading
+- Background task optimization
 
 ## Contributing
 
 1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create your feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Support
 

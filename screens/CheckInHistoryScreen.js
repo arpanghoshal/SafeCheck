@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, FlatList, Alert } from 'react-native';
-import { Text, Card, Chip, Divider, Button, ActivityIndicator } from 'react-native-paper';
+import { View, StyleSheet, FlatList, Alert, Image } from 'react-native';
+import { Text, Card, Chip, Divider, Button, ActivityIndicator, IconButton } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import firestore from '@react-native-firebase/firestore';
+import auth from '@react-native-firebase/auth';
 import Header from '../components/Header';
+
+const ITEMS_PER_PAGE = 10;
 
 const formatDateTime = (timestamp) => {
   if (!timestamp) return 'Unknown';
@@ -26,10 +29,29 @@ const CheckInHistoryScreen = ({ route, navigation }) => {
   const [checkIns, setCheckIns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [lastVisible, setLastVisible] = useState(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [unsubscribe, setUnsubscribe] = useState(null);
 
-  const loadContactAndHistory = async () => {
+  useEffect(() => {
+    loadContactAndHistory();
+    
+    // Cleanup subscription on unmount
+    return () => {
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [contactId]);
+
+  const loadContactAndHistory = async (isRefreshing = false) => {
     try {
-      setLoading(true);
+      if (isRefreshing) {
+        setRefreshing(true);
+      } else {
+        setLoading(true);
+      }
       
       // Fetch contact details
       const contactDoc = await firestore().collection('contacts').doc(contactId).get();
@@ -42,38 +64,94 @@ const CheckInHistoryScreen = ({ route, navigation }) => {
       
       setContact(contactDoc.data());
       
-      // Fetch check-in history
-      const checkInsSnapshot = await firestore()
+      // Set up real-time listener for check-ins
+      const checkInsQuery = firestore()
         .collection('checkIns')
         .where('contactId', '==', contactId)
         .orderBy('sentAt', 'desc')
-        .get();
+        .limit(ITEMS_PER_PAGE);
       
-      const checkInList = [];
-      checkInsSnapshot.forEach(doc => {
-        checkInList.push({
-          id: doc.id,
-          ...doc.data()
-        });
-      });
+      // Unsubscribe from previous listener if exists
+      if (unsubscribe) {
+        unsubscribe();
+      }
       
-      setCheckIns(checkInList);
+      // Set up new listener
+      const newUnsubscribe = checkInsQuery.onSnapshot(
+        (snapshot) => {
+          const checkInList = [];
+          snapshot.forEach(doc => {
+            checkInList.push({
+              id: doc.id,
+              ...doc.data()
+            });
+          });
+          
+          setCheckIns(checkInList);
+          setLastVisible(snapshot.docs[snapshot.docs.length - 1]);
+          setHasMore(snapshot.docs.length === ITEMS_PER_PAGE);
+          
+          if (isRefreshing) {
+            setRefreshing(false);
+          } else {
+            setLoading(false);
+          }
+        },
+        (error) => {
+          console.error('Error in check-ins listener:', error);
+          Alert.alert('Error', 'Failed to load check-in history. Please try again.');
+          if (isRefreshing) {
+            setRefreshing(false);
+          } else {
+            setLoading(false);
+          }
+        }
+      );
+      
+      setUnsubscribe(() => newUnsubscribe);
     } catch (error) {
       console.error('Error loading check-in history:', error);
       Alert.alert('Error', 'Failed to load check-in history. Please try again.');
-    } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  useEffect(() => {
-    loadContactAndHistory();
-  }, [contactId]);
+  const loadMoreCheckIns = async () => {
+    if (!hasMore || loadingMore) return;
+
+    try {
+      setLoadingMore(true);
+      
+      const checkInsSnapshot = await firestore()
+        .collection('checkIns')
+        .where('contactId', '==', contactId)
+        .orderBy('sentAt', 'desc')
+        .startAfter(lastVisible)
+        .limit(ITEMS_PER_PAGE)
+        .get();
+      
+      const newCheckIns = [];
+      checkInsSnapshot.forEach(doc => {
+        newCheckIns.push({
+          id: doc.id,
+          ...doc.data()
+        });
+      });
+      
+      setCheckIns(prev => [...prev, ...newCheckIns]);
+      setLastVisible(checkInsSnapshot.docs[checkInsSnapshot.docs.length - 1]);
+      setHasMore(checkInsSnapshot.docs.length === ITEMS_PER_PAGE);
+    } catch (error) {
+      console.error('Error loading more check-ins:', error);
+      Alert.alert('Error', 'Failed to load more check-ins. Please try again.');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const handleRefresh = () => {
-    setRefreshing(true);
-    loadContactAndHistory();
+    loadContactAndHistory(true);
   };
 
   const getStatusChip = (status, response) => {
@@ -129,6 +207,25 @@ const CheckInHistoryScreen = ({ route, navigation }) => {
               </Text>
             </View>
             
+            {item.responseType === 'photo' && item.photoUrl && (
+              <View style={styles.mediaContainer}>
+                <Image source={{ uri: item.photoUrl }} style={styles.mediaPreview} />
+              </View>
+            )}
+            
+            {item.responseType === 'voice' && item.audioUrl && (
+              <View style={styles.mediaContainer}>
+                <IconButton
+                  icon="play-circle"
+                  size={40}
+                  onPress={() => {/* Handle audio playback */}}
+                />
+                <Text style={styles.audioDuration}>
+                  {item.audioDuration ? `${item.audioDuration}s` : 'Voice message'}
+                </Text>
+              </View>
+            )}
+            
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>Responded:</Text>
               <Text>{formatDateTime(item.respondedAt)}</Text>
@@ -138,6 +235,16 @@ const CheckInHistoryScreen = ({ route, navigation }) => {
       </Card.Content>
     </Card>
   );
+
+  const renderFooter = () => {
+    if (!loadingMore) return null;
+    return (
+      <View style={styles.footerLoader}>
+        <ActivityIndicator size="small" color="#1976D2" />
+        <Text style={styles.footerText}>Loading more...</Text>
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -172,6 +279,9 @@ const CheckInHistoryScreen = ({ route, navigation }) => {
           contentContainerStyle={styles.listContainer}
           refreshing={refreshing}
           onRefresh={handleRefresh}
+          onEndReached={loadMoreCheckIns}
+          onEndReachedThreshold={0.5}
+          ListFooterComponent={renderFooter}
         />
       )}
     </SafeAreaView>
@@ -245,6 +355,27 @@ const styles = StyleSheet.create({
   negativeResponse: {
     color: '#F44336',
     fontWeight: 'bold',
+  },
+  mediaContainer: {
+    marginVertical: 12,
+    alignItems: 'center',
+  },
+  mediaPreview: {
+    width: '100%',
+    height: 200,
+    borderRadius: 8,
+  },
+  audioDuration: {
+    marginTop: 4,
+    color: '#757575',
+  },
+  footerLoader: {
+    paddingVertical: 20,
+    alignItems: 'center',
+  },
+  footerText: {
+    marginTop: 8,
+    color: '#757575',
   },
 });
 

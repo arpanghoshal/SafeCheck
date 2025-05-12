@@ -2,10 +2,8 @@ import React from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 
 // Screens
-import LoginScreen from '../screens/LoginScreen';
-import RegisterScreen from '../screens/RegisterScreen';
+import PhoneAuthScreen from '../screens/PhoneAuthScreen';
 import OnboardingScreen from '../screens/OnboardingScreen';
-import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 
 const Stack = createStackNavigator();
 
@@ -18,9 +16,7 @@ const AuthNavigator = () => {
       }}
     >
       <Stack.Screen name="Onboarding" component={OnboardingScreen} />
-      <Stack.Screen name="Login" component={LoginScreen} />
-      <Stack.Screen name="Register" component={RegisterScreen} />
-      <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
+      <Stack.Screen name="PhoneAuth" component={PhoneAuthScreen} />
     </Stack.Navigator>
   );
 };

@@ -26,13 +26,18 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { Audio } from 'expo-av';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getFirestore, doc, getDoc, updateDoc, Timestamp } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import firestore from '@react-native-firebase/firestore';
+import storage from '@react-native-firebase/storage';
 import LottieView from 'lottie-react-native';
 import MapView, { Marker } from 'react-native-maps';
+import * as FileSystem from 'expo-file-system';
 
 // Status durations in hours
 const STATUS_DURATIONS = [1, 3, 6, 12, 24];
+
+const MAX_AUDIO_DURATION = 60; // 60 seconds
+const IMAGE_QUALITY = 0.6;
+const MAX_IMAGE_SIZE = 1024 * 1024; // 1MB
 
 const EnhancedRespondScreen = ({ route, navigation }) => {
   const { checkInId } = route.params || {};
@@ -67,8 +72,8 @@ const EnhancedRespondScreen = ({ route, navigation }) => {
   const [statusText, setStatusText] = useState('');
   const [statusDuration, setStatusDuration] = useState(3); // Default 3 hours
 
-  const db = getFirestore();
-  const storage = getStorage();
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     fetchCheckInData();
@@ -114,10 +119,10 @@ const EnhancedRespondScreen = ({ route, navigation }) => {
 
     try {
       setLoading(true);
-      const checkInRef = doc(db, 'checkIns', checkInId);
-      const checkInSnap = await getDoc(checkInRef);
+      const checkInRef = firestore().collection('checkIns').doc(checkInId);
+      const checkInSnap = await checkInRef.get();
       
-      if (!checkInSnap.exists()) {
+      if (!checkInSnap.exists) {
         Alert.alert('Error', 'Check-in not found or has expired.');
         return;
       }
@@ -149,10 +154,10 @@ const EnhancedRespondScreen = ({ route, navigation }) => {
       }
       
       // Get contact details to know response options
-      const contactRef = doc(db, 'contacts', checkInData.contactId);
-      const contactSnap = await getDoc(contactRef);
+      const contactRef = firestore().collection('contacts').doc(checkInData.contactId);
+      const contactSnap = await contactRef.get();
       
-      if (contactSnap.exists()) {
+      if (contactSnap.exists) {
         setContact(contactSnap.data());
       }
     } catch (error) {
@@ -171,13 +176,15 @@ const EnhancedRespondScreen = ({ route, navigation }) => {
       setResponding(true);
       
       // Update check-in with response
-      const checkInRef = doc(db, 'checkIns', checkInId);
-      await updateDoc(checkInRef, {
-        status: 'responded',
-        response,
-        responseType: 'standard',
-        respondedAt: Timestamp.now()
-      });
+      await firestore()
+        .collection('checkIns')
+        .doc(checkInId)
+        .update({
+          status: 'responded',
+          response,
+          responseType: 'standard',
+          respondedAt: firestore.FieldValue.serverTimestamp()
+        });
       
       setSubmitted(true);
       
@@ -229,37 +236,79 @@ const EnhancedRespondScreen = ({ route, navigation }) => {
     }
   };
 
+  const compressImage = async (uri) => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [4, 3],
+        quality: IMAGE_QUALITY,
+      });
+      
+      if (!result.canceled) {
+        const fileInfo = await FileSystem.getInfoAsync(result.assets[0].uri);
+        if (fileInfo.size > MAX_IMAGE_SIZE) {
+          Alert.alert('Error', 'Image size must be less than 1MB. Please choose a smaller image or compress it further.');
+          return null;
+        }
+        return result.assets[0].uri;
+      }
+      return null;
+    } catch (error) {
+      console.error('Error compressing image:', error);
+      Alert.alert('Error', 'Failed to compress image. Please try again.');
+      return null;
+    }
+  };
+
   const handlePhotoResponse = async () => {
     if (!checkIn || !checkInId || !photoUri) return;
     
     try {
-      setResponding(true);
+      setUploading(true);
+      setUploadProgress(0);
       
-      // Upload photo to Firebase Storage
+      // Upload photo to Firebase Storage with progress tracking
       const response = await fetch(photoUri);
       const blob = await response.blob();
-      const storageRef = ref(storage, `check-in-responses/${checkInId}_photo.jpg`);
+      const storageRef = storage().ref(`check-in-responses/${checkInId}_photo.jpg`);
       
-      await uploadBytes(storageRef, blob);
-      const downloadUrl = await getDownloadURL(storageRef);
+      const uploadTask = storageRef.put(blob);
       
-      // Update check-in with response
-      const checkInRef = doc(db, 'checkIns', checkInId);
-      await updateDoc(checkInRef, {
-        status: 'responded',
-        response: 'PHOTO',
-        responseType: 'photo',
-        photoUrl: downloadUrl,
-        respondedAt: Timestamp.now()
-      });
-      
-      setSubmitted(true);
-      Alert.alert('Thank You', 'Your photo response has been sent.');
+      uploadTask.on('state_changed', 
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setUploadProgress(progress);
+        },
+        (error) => {
+          console.error('Error uploading photo:', error);
+          Alert.alert('Error', 'Failed to upload photo. Please try again.');
+          setUploading(false);
+        },
+        async () => {
+          const downloadUrl = await storageRef.getDownloadURL();
+          
+          // Update check-in with response
+          await firestore()
+            .collection('checkIns')
+            .doc(checkInId)
+            .update({
+              status: 'responded',
+              response: 'PHOTO',
+              responseType: 'photo',
+              photoUrl: downloadUrl,
+              respondedAt: firestore.FieldValue.serverTimestamp()
+            });
+          
+          setSubmitted(true);
+          Alert.alert('Thank You', 'Your photo response has been sent.');
+          setUploading(false);
+        }
+      );
     } catch (error) {
       console.error('Error submitting photo response:', error);
       Alert.alert('Error', 'Failed to submit your photo. Please try again.');
-    } finally {
-      setResponding(false);
+      setUploading(false);
     }
   };
 
@@ -283,6 +332,14 @@ const EnhancedRespondScreen = ({ route, navigation }) => {
       setRecording(newRecording);
       setRecordingStatus('recording');
       setRecordingDuration(0);
+      
+      // Set up timer to stop recording after MAX_AUDIO_DURATION
+      setTimeout(async () => {
+        if (recordingStatus === 'recording') {
+          await stopRecording();
+          Alert.alert('Recording Complete', 'Maximum recording duration reached.');
+        }
+      }, MAX_AUDIO_DURATION * 1000);
     } catch (error) {
       console.error('Error starting recording:', error);
       Alert.alert('Error', 'Failed to start recording. Please try again.');
@@ -346,34 +403,51 @@ const EnhancedRespondScreen = ({ route, navigation }) => {
     if (!checkIn || !checkInId || !audioUri) return;
     
     try {
-      setResponding(true);
+      setUploading(true);
+      setUploadProgress(0);
       
-      // Upload audio to Firebase Storage
+      // Upload audio to Firebase Storage with progress tracking
       const response = await fetch(audioUri);
       const blob = await response.blob();
-      const storageRef = ref(storage, `check-in-responses/${checkInId}_audio.m4a`);
+      const storageRef = storage().ref(`check-in-responses/${checkInId}_audio.m4a`);
       
-      await uploadBytes(storageRef, blob);
-      const downloadUrl = await getDownloadURL(storageRef);
+      const uploadTask = storageRef.put(blob);
       
-      // Update check-in with response
-      const checkInRef = doc(db, 'checkIns', checkInId);
-      await updateDoc(checkInRef, {
-        status: 'responded',
-        response: 'AUDIO',
-        responseType: 'voice',
-        audioUrl: downloadUrl,
-        audioDuration: recordingDuration,
-        respondedAt: Timestamp.now()
-      });
-      
-      setSubmitted(true);
-      Alert.alert('Thank You', 'Your voice response has been sent.');
+      uploadTask.on('state_changed', 
+        (snapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          setUploadProgress(progress);
+        },
+        (error) => {
+          console.error('Error uploading audio:', error);
+          Alert.alert('Error', 'Failed to upload audio. Please try again.');
+          setUploading(false);
+        },
+        async () => {
+          const downloadUrl = await storageRef.getDownloadURL();
+          
+          // Update check-in with response
+          await firestore()
+            .collection('checkIns')
+            .doc(checkInId)
+            .update({
+              status: 'responded',
+              response: 'AUDIO',
+              responseType: 'voice',
+              audioUrl: downloadUrl,
+              audioDuration: recordingDuration,
+              respondedAt: firestore.FieldValue.serverTimestamp()
+            });
+          
+          setSubmitted(true);
+          Alert.alert('Thank You', 'Your voice response has been sent.');
+          setUploading(false);
+        }
+      );
     } catch (error) {
       console.error('Error submitting voice response:', error);
       Alert.alert('Error', 'Failed to submit your voice message. Please try again.');
-    } finally {
-      setResponding(false);
+      setUploading(false);
     }
   };
 
@@ -407,14 +481,16 @@ const EnhancedRespondScreen = ({ route, navigation }) => {
       setResponding(true);
       
       // Update check-in with response
-      const checkInRef = doc(db, 'checkIns', checkInId);
-      await updateDoc(checkInRef, {
-        status: 'responded',
-        response: 'LOCATION',
-        responseType: 'location',
-        locationData: location,
-        respondedAt: Timestamp.now()
-      });
+      await firestore()
+        .collection('checkIns')
+        .doc(checkInId)
+        .update({
+          status: 'responded',
+          response: 'LOCATION',
+          responseType: 'location',
+          locationData: location,
+          respondedAt: firestore.FieldValue.serverTimestamp()
+        });
       
       setSubmitted(true);
       Alert.alert('Thank You', 'Your location has been shared.');
@@ -441,15 +517,17 @@ const EnhancedRespondScreen = ({ route, navigation }) => {
       expiryTime.setHours(expiryTime.getHours() + statusDuration);
       
       // Update check-in with response
-      const checkInRef = doc(db, 'checkIns', checkInId);
-      await updateDoc(checkInRef, {
-        status: 'responded',
-        response: statusText,
-        responseType: 'status',
-        statusDuration: statusDuration,
-        statusExpiresAt: Timestamp.fromDate(expiryTime),
-        respondedAt: Timestamp.now()
-      });
+      await firestore()
+        .collection('checkIns')
+        .doc(checkInId)
+        .update({
+          status: 'responded',
+          response: statusText,
+          responseType: 'status',
+          statusDuration: statusDuration,
+          statusExpiresAt: firestore.FieldValue.serverTimestamp(),
+          respondedAt: firestore.FieldValue.serverTimestamp()
+        });
       
       setSubmitted(true);
       setStatusDialogVisible(false);
@@ -678,6 +756,18 @@ const EnhancedRespondScreen = ({ route, navigation }) => {
     );
   };
 
+  const renderUploadProgress = () => {
+    if (!uploading) return null;
+    return (
+      <View style={styles.progressContainer}>
+        <Text style={styles.progressText}>Uploading... {Math.round(uploadProgress)}%</Text>
+        <View style={styles.progressBar}>
+          <View style={[styles.progressFill, { width: `${uploadProgress}%` }]} />
+        </View>
+      </View>
+    );
+  };
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -893,6 +983,25 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     textAlign: 'center',
     marginBottom: 16,
+  },
+  progressContainer: {
+    padding: 16,
+    alignItems: 'center',
+  },
+  progressText: {
+    marginBottom: 8,
+    color: '#757575',
+  },
+  progressBar: {
+    width: '100%',
+    height: 4,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 2,
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#1976D2',
+    borderRadius: 2,
   },
 });
 

@@ -1,0 +1,61 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+    
+    function isContact(userId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/contacts/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/contacts/$(request.auth.uid)).data.userId == userId;
+    }
+
+    // Users collection
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isContact(userId);
+      allow create: if isAuthenticated() && request.auth.uid == userId;
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+
+    // Contacts collection
+    match /contacts/{contactId} {
+      allow read: if isOwner(resource.data.userId) || isOwner(resource.data.contactId);
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
+      allow update: if isOwner(resource.data.userId);
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // Check-ins collection
+    match /checkIns/{checkInId} {
+      allow read: if isOwner(resource.data.senderId) || isOwner(resource.data.recipientId);
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.senderId;
+      allow update: if isOwner(resource.data.recipientId);
+      allow delete: if isOwner(resource.data.senderId);
+    }
+
+    // Emergencies collection
+    match /emergencies/{emergencyId} {
+      allow read: if isOwner(resource.data.userId) || isContact(resource.data.userId);
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
+      allow update: if isOwner(resource.data.userId);
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    // Media collection (for photos, voice messages, etc.)
+    match /media/{mediaId} {
+      allow read: if isAuthenticated() && (
+        isOwner(resource.data.userId) || 
+        isContact(resource.data.userId)
+      );
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.userId;
+      allow delete: if isOwner(resource.data.userId);
+    }
+  }
+} 

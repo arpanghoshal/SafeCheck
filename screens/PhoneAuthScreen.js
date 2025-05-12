@@ -3,7 +3,7 @@ import { View, StyleSheet, Image, Alert, TouchableOpacity, KeyboardAvoidingView,
 import { Text, TextInput, Button, ActivityIndicator } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import auth from '@react-native-firebase/auth';
-import { getFirestore, doc, setDoc, getDoc } from 'firebase/firestore';
+import firestore from '@react-native-firebase/firestore';
 import PhoneInput from 'react-native-phone-number-input';
 import LottieView from 'lottie-react-native';
 
@@ -65,20 +65,25 @@ const PhoneAuthScreen = ({ navigation }) => {
       await verificationId.confirm(verificationCode);
       
       // Check if user exists in Firestore
-      const db = getFirestore();
-      const userDoc = await getDoc(doc(db, 'users', auth().currentUser.uid));
+      const userDoc = await firestore()
+        .collection('users')
+        .doc(auth().currentUser.uid)
+        .get();
       
-      if (!userDoc.exists()) {
+      if (!userDoc.exists) {
         // Create new user record if this is their first login
-        await setDoc(doc(db, 'users', auth().currentUser.uid), {
-          phoneNumber: formattedPhoneNumber,
-          createdAt: new Date(),
-          preferences: {
-            notificationsEnabled: true,
-            notifyOnNegative: true,
-            notifyOnNoResponse: true
-          }
-        });
+        await firestore()
+          .collection('users')
+          .doc(auth().currentUser.uid)
+          .set({
+            phoneNumber: formattedPhoneNumber,
+            createdAt: firestore.FieldValue.serverTimestamp(),
+            preferences: {
+              notificationsEnabled: true,
+              notifyOnNegative: true,
+              notifyOnNoResponse: true
+            }
+          });
       }
       
       // Navigation will be handled automatically by the auth state listener

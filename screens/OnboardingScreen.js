@@ -3,6 +3,9 @@ import { View, StyleSheet, FlatList, Dimensions, Image, Animated } from 'react-n
 import { Text, Button } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import LottieView from 'lottie-react-native';
+import firestore from '@react-native-firebase/firestore';
+import auth from '@react-native-firebase/auth';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width, height } = Dimensions.get('window');
 
@@ -138,6 +141,25 @@ const OnboardingScreen = ({ onComplete }) => {
         })}
       </View>
     );
+  };
+
+  const handleComplete = async () => {
+    try {
+      const userId = auth().currentUser.uid;
+      
+      await firestore()
+        .collection('users')
+        .doc(userId)
+        .update({
+          onboardingCompleted: true,
+          updatedAt: firestore.FieldValue.serverTimestamp()
+        });
+      
+      await AsyncStorage.setItem('onboardingCompleted', 'true');
+      onComplete();
+    } catch (error) {
+      console.error('Error completing onboarding:', error);
+    }
   };
 
   return (

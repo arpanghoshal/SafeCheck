@@ -1,17 +1,23 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
-import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { Provider as PaperProvider, DefaultTheme } from 'react-native-paper';
+import { createStackNavigator } from '@react-navigation/stack';
 import * as Notifications from 'expo-notifications';
-import Constants from 'expo-constants';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as TaskManager from 'expo-task-manager';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import auth from '@react-native-firebase/auth';
+import firestore from '@react-native-firebase/firestore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { StatusBar } from 'expo-status-bar';
+import { Provider as PaperProvider, DefaultTheme } from 'react-native-paper';
+import { useNavigation } from '@react-navigation/native';
 
 // Navigation
 import AppNavigator from './navigation/AppNavigator';
 import PhoneAuthScreen from './screens/PhoneAuthScreen';
 import OnboardingScreen from './screens/OnboardingScreen';
+import AuthNavigator from './navigation/AuthNavigator';
+import MainNavigator from './navigation/MainNavigator';
 
 // Firebase config
 import firebaseConfig from './config/firebase';
@@ -39,7 +45,13 @@ const theme = {
   },
 };
 
-// Configure notifications
+// Enable offline persistence
+firestore().settings({
+  persistence: true,
+  cacheSizeBytes: firestore.CACHE_SIZE_UNLIMITED
+});
+
+// Configure notification handler
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -48,94 +60,170 @@ Notifications.setNotificationHandler({
   }),
 });
 
-export default function App() {
+// Background task for location updates
+const LOCATION_TASK_NAME = 'background-location-task';
+TaskManager.defineTask(LOCATION_TASK_NAME, ({ data, error }) => {
+  if (error) {
+    console.error('Location task error:', error);
+    return;
+  }
+  if (data) {
+    const { locations } = data;
+    // Handle location updates
+    console.log('Received background location:', locations);
+  }
+});
+
+const Stack = createStackNavigator();
+
+const App = () => {
   const [user, setUser] = useState(null);
-  const [initializing, setInitializing] = useState(true);
-  const [expoPushToken, setExpoPushToken] = useState('');
-  const [hasSeenOnboarding, setHasSeenOnboarding] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [onboardingComplete, setOnboardingComplete] = useState(false);
+  const [pushToken, setPushToken] = useState(null);
   const notificationListener = useRef();
   const responseListener = useRef();
+  const navigation = useNavigation();
 
-  // Handle user auth state changes
   useEffect(() => {
-    const unsubscribe = auth().onAuthStateChanged((currentUser) => {
-      setUser(currentUser);
-      if (initializing) setInitializing(false);
-    });
+    // Check if user has completed onboarding
+    const checkOnboarding = async () => {
+      try {
+        const value = await AsyncStorage.getItem('onboardingComplete');
+        setOnboardingComplete(value === 'true');
+      } catch (error) {
+        console.error('Error checking onboarding status:', error);
+      }
+    };
 
-    return unsubscribe;
-  }, [initializing]);
-
-  // Register for push notifications
-  useEffect(() => {
-    registerForPushNotificationsAsync().then(token => setExpoPushToken(token));
+    // Register for push notifications
+    const registerForPushNotifications = async () => {
+      try {
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+        
+        if (existingStatus !== 'granted') {
+          const { status } = await Notifications.requestPermissionsAsync();
+          finalStatus = status;
+        }
+        
+        if (finalStatus !== 'granted') {
+          console.log('Failed to get push token for push notification!');
+          return;
+        }
+        
+        const token = (await Notifications.getExpoPushTokenAsync()).data;
+        setPushToken(token);
+        
+        // Save token to Firestore if user is logged in
+        if (user) {
+          await firestore()
+            .collection('users')
+            .doc(user.uid)
+            .update({
+              pushToken: token,
+              updatedAt: firestore.FieldValue.serverTimestamp()
+            });
+        }
+      } catch (error) {
+        console.error('Error registering for push notifications:', error);
+      }
+    };
 
     // Set up notification listeners
     notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-      console.log(notification);
+      const data = notification.request.content.data;
+      
+      // Handle different notification types
+      switch (data.type) {
+        case 'checkIn':
+          // Handle check-in notification
+          break;
+        case 'emergency':
+          // Handle emergency notification
+          break;
+        default:
+          console.log('Unknown notification type:', data.type);
+      }
     });
 
     responseListener.current = Notifications.addNotificationResponseReceivedListener(response => {
-      console.log(response);
+      const data = response.notification.request.content.data;
+      
+      // Handle notification response
+      switch (data.type) {
+        case 'checkIn':
+          // Navigate to check-in screen
+          navigation.navigate('EnhancedRespond', { checkInId: data.checkInId });
+          break;
+        case 'emergency':
+          // Navigate to emergency screen
+          navigation.navigate('EmergencyDetails', { emergencyId: data.emergencyId });
+          break;
+        default:
+          console.log('Unknown notification type:', data.type);
+      }
     });
 
-    // Check if user has seen onboarding
-    const checkOnboarding = async () => {
-      try {
-        const value = await AsyncStorage.getItem('@safecheck_onboarding_complete');
-        setHasSeenOnboarding(value === 'true');
-      } catch (error) {
-        console.log('Error checking onboarding status:', error);
+    // Set up auth state listener
+    const unsubscribe = auth().onAuthStateChanged(async (user) => {
+      setUser(user);
+      if (user) {
+        await registerForPushNotifications();
       }
-    };
-    
+      setLoading(false);
+    });
+
     checkOnboarding();
 
+    // Cleanup
     return () => {
-      Notifications.removeNotificationSubscription(notificationListener.current);
-      Notifications.removeNotificationSubscription(responseListener.current);
+      unsubscribe();
+      notificationListener.current.remove();
+      responseListener.current.remove();
     };
-  }, []);
+  }, [navigation]);
 
-  // Loading state
-  if (initializing) {
-    return null; // Consider adding a splash screen or loader here
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Text>Loading...</Text>
+      </View>
+    );
   }
-
-  const completeOnboarding = async () => {
-    try {
-      await AsyncStorage.setItem('@safecheck_onboarding_complete', 'true');
-      setHasSeenOnboarding(true);
-    } catch (error) {
-      console.log('Error saving onboarding status:', error);
-    }
-  };
-
-  // Render either onboarding, auth screen, or main app based on state
-  const renderScreen = () => {
-    if (user) {
-      // User is logged in, show the main app
-      return <AppNavigator />;
-    } else if (!hasSeenOnboarding) {
-      // User hasn't seen onboarding yet
-      return <OnboardingScreen onComplete={completeOnboarding} />;
-    } else {
-      // User has seen onboarding but isn't logged in
-      return <PhoneAuthScreen />;
-    }
-  };
 
   return (
     <SafeAreaProvider>
       <PaperProvider theme={theme}>
         <NavigationContainer>
-          {renderScreen()}
           <StatusBar style="auto" />
+          <Stack.Navigator screenOptions={{ headerShown: false }}>
+            {!user ? (
+              // Auth Stack
+              <Stack.Screen name="Auth" component={AuthNavigator} />
+            ) : !onboardingComplete ? (
+              // Onboarding Stack
+              <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+            ) : (
+              // Main App Stack
+              <Stack.Screen name="Main" component={MainNavigator} />
+            )}
+          </Stack.Navigator>
         </NavigationContainer>
       </PaperProvider>
     </SafeAreaProvider>
   );
-}
+};
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+});
+
+export default App;
 
 async function registerForPushNotificationsAsync() {
   let token;
@@ -150,14 +238,17 @@ async function registerForPushNotificationsAsync() {
     }
     
     if (finalStatus !== 'granted') {
-      alert('Failed to get push token for push notification!');
+      console.log('Failed to get push token for push notification!');
       return;
     }
     
-    token = (await Notifications.getExpoPushTokenAsync()).data;
+    token = (await Notifications.getExpoPushTokenAsync({
+      projectId: Constants.expoConfig.extra.eas.projectId
+    })).data;
   } else {
-    alert('Must use physical device for Push Notifications');
+    console.log('Must use physical device for Push Notifications');
   }
 
   return token;
+} 
 } 
