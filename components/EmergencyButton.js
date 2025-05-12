@@ -1,14 +1,32 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, StyleSheet, Alert } from 'react-native';
-import { Button, Portal, Modal, Text, ActivityIndicator } from 'react-native-paper';
+import { Button, Portal, Modal, Text, ActivityIndicator, Chip } from 'react-native-paper';
 import * as Location from 'expo-location';
 import firestore from '@react-native-firebase/firestore';
 import auth from '@react-native-firebase/auth';
+
+// Import network connectivity utilities
+import { isConnected, sendMessage } from '../utils/networkConnectivity';
 
 const EmergencyButton = () => {
   const [loading, setLoading] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
   const [countdown, setCountdown] = useState(5);
+  const [networkStatus, setNetworkStatus] = useState(true);
+  const [usingSMS, setUsingSMS] = useState(false);
+
+  // Check network status on component mount and when visible
+  useEffect(() => {
+    if (modalVisible) {
+      checkNetworkStatus();
+    }
+  }, [modalVisible]);
+
+  const checkNetworkStatus = async () => {
+    const connected = await isConnected();
+    setNetworkStatus(connected);
+    setUsingSMS(!connected);
+  };
 
   const handleEmergencyPress = () => {
     setModalVisible(true);
@@ -77,15 +95,56 @@ const EmergencyButton = () => {
         contacts: contacts.map(c => c.id),
       };
       
+      // Save to Firestore if online, otherwise save locally and sync later
       const emergencyRef = await firestore().collection('emergencies').add(emergencyData);
       
-      // Send notifications to all contacts
-      // This would typically be handled by a Cloud Function
-      // For now, we'll just show a success message
+      // Get user info for notifications
+      const userDoc = await firestore().collection('users').doc(currentUser.uid).get();
+      const userData = userDoc.data();
+      const userName = userData?.displayName || userData?.phoneNumber || 'Your contact';
+      
+      // Send notifications to all contacts using our network-aware utility
+      const notificationPromises = contacts.map(async (contact) => {
+        try {
+          // Look up the contact's user information
+          const contactUserDoc = await firestore().collection('users').doc(contact.contactId).get();
+          
+          if (contactUserDoc.exists) {
+            const contactUserData = contactUserDoc.data();
+            
+            // Create the recipient object with both push token and phone number
+            const recipient = {
+              expoPushToken: contactUserData.pushToken,
+              phoneNumber: contactUserData.phoneNumber
+            };
+            
+            // Send the message with SMS fallback
+            await sendMessage(
+              recipient,
+              'EMERGENCY ALERT',
+              `${userName} needs help! Location: https://maps.google.com/?q=${location.coords.latitude},${location.coords.longitude}`,
+              {
+                type: 'emergency',
+                emergencyId: emergencyRef.id,
+              }
+            );
+          }
+        } catch (error) {
+          console.error(`Error sending alert to contact ${contact.id}:`, error);
+        }
+      });
+      
+      try {
+        await Promise.all(notificationPromises);
+      } catch (error) {
+        console.error('Some notifications may have failed:', error);
+      }
       
       Alert.alert(
         'Emergency Alert Sent',
-        'Your emergency contacts have been notified with your location.',
+        networkStatus 
+          ? 'Your emergency contacts have been notified with your location.' 
+          : 'Your emergency contacts have been notified via SMS with your location.',
         [{ text: 'OK' }]
       );
       
@@ -121,6 +180,17 @@ const EmergencyButton = () => {
           <Text style={styles.modalText}>
             An emergency alert will be sent to all your contacts with your current location.
           </Text>
+          
+          {usingSMS && (
+            <Chip 
+              icon="message-text" 
+              style={styles.smsChip}
+              mode="outlined"
+            >
+              Using SMS (Offline Mode)
+            </Chip>
+          )}
+          
           <Text style={styles.countdownText}>
             Sending in {countdown} seconds...
           </Text>
@@ -177,6 +247,10 @@ const styles = StyleSheet.create({
   },
   cancelButton: {
     width: '100%',
+  },
+  smsChip: {
+    marginBottom: 16,
+    backgroundColor: '#fff3e0',
   },
 });
 

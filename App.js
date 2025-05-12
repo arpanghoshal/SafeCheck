@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, Alert } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -9,8 +9,12 @@ import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StatusBar } from 'expo-status-bar';
-import { Provider as PaperProvider, DefaultTheme } from 'react-native-paper';
+import { Provider as PaperProvider, DefaultTheme, Snackbar } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
+import Constants from 'expo-constants';
+
+// Network connectivity utils
+import { setupNetworkListener, processQueue } from './utils/networkConnectivity';
 
 // Navigation
 import AppNavigator from './navigation/AppNavigator';
@@ -81,8 +85,12 @@ const App = () => {
   const [loading, setLoading] = useState(true);
   const [onboardingComplete, setOnboardingComplete] = useState(false);
   const [pushToken, setPushToken] = useState(null);
+  const [isConnected, setIsConnected] = useState(true);
+  const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
   const notificationListener = useRef();
   const responseListener = useRef();
+  const netInfoUnsubscribe = useRef(null);
   const navigation = useNavigation();
 
   useEffect(() => {
@@ -129,6 +137,25 @@ const App = () => {
         console.error('Error registering for push notifications:', error);
       }
     };
+
+    // Set up network connectivity listener
+    netInfoUnsubscribe.current = setupNetworkListener(
+      // Online callback
+      () => {
+        console.log('Device is back online');
+        setIsConnected(true);
+        setSnackbarMessage('You are back online');
+        setSnackbarVisible(true);
+        processQueue(); // Process any queued messages
+      },
+      // Offline callback
+      () => {
+        console.log('Device is offline');
+        setIsConnected(false);
+        setSnackbarMessage('You are offline - SMS will be used for critical alerts');
+        setSnackbarVisible(true);
+      }
+    );
 
     // Set up notification listeners
     notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
@@ -179,8 +206,9 @@ const App = () => {
     // Cleanup
     return () => {
       unsubscribe();
-      notificationListener.current.remove();
-      responseListener.current.remove();
+      if (notificationListener.current) notificationListener.current.remove();
+      if (responseListener.current) responseListener.current.remove();
+      if (netInfoUnsubscribe.current) netInfoUnsubscribe.current();
     };
   }, [navigation]);
 
@@ -209,6 +237,19 @@ const App = () => {
               <Stack.Screen name="Main" component={MainNavigator} />
             )}
           </Stack.Navigator>
+          
+          {/* Network status snackbar */}
+          <Snackbar
+            visible={snackbarVisible}
+            onDismiss={() => setSnackbarVisible(false)}
+            duration={3000}
+            action={{
+              label: 'Dismiss',
+              onPress: () => setSnackbarVisible(false),
+            }}
+          >
+            {snackbarMessage}
+          </Snackbar>
         </NavigationContainer>
       </PaperProvider>
     </SafeAreaProvider>
